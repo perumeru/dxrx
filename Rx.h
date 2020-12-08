@@ -1422,8 +1422,8 @@ namespace dxrx {
 	template <class Type>
 	interface IObserver {
 		void OnCompleted();
-		void OnError(std::exception& error);
-		void OnNext(Type value);
+		void OnError();
+		void OnNext(Type value, BOOL& error);
 	};
 	template <class Type>
 	interface IObservable {
@@ -1500,34 +1500,31 @@ namespace dxrx {
 				return _parent->_source.Subscribe(this);
 			}
 
-			void OnNext(T value)
+			void OnNext(T value, BOOL& error)
 			{
 				Lock l;
 
 				if (_observer == nullptr) return;
-				try
+				
+				//条件を満たす場合のみOnNextを通過
+				if (_parent->_conditionalFunc(value))
 				{
-					//条件を満たす場合のみOnNextを通過
-					if (_parent->_conditionalFunc(value))
+					_observer->OnNext(value, error);
+					if (error)
 					{
-						_observer->OnNext(value);
+						//途中でエラーが発生したらエラーを送信
+						_observer->OnError();
+						_observer = nullptr;
 					}
 				}
-				catch (std::exception& e)
-				{
-					//途中でエラーが発生したらエラーを送信
-					_observer->OnError(e);
-					_observer = nullptr;
-				}
-
 			}
 
-			void OnError(std::exception& error)
+			void OnError()
 			{
 				Lock l;
 
 				//エラーを伝播して停止
-				_observer->OnError(error);
+				_observer->OnError();
 				_observer = nullptr;
 
 			}
