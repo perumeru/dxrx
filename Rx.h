@@ -132,6 +132,37 @@ namespace MemoryPool {
 		MemoryReuse<T, Size> pool;
 	};
 }
+/*
+int
+foo() {
+	cout << "execute: " << __PRETTY_FUNCTION__ << endl;
+	return time(NULL);
+}
+int mainl()
+{
+	{//すぐにfooが実行されます。
+		cout << "async foo" << endl;
+		future<int> f1 = std::async(
+			std::launch::async, foo);
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		cout << "after sleep" << endl;
+		int r = f1.get();
+		cout << r << endl;
+	}
+	cout << endl;
+
+	{//メインスレッドのsleepが終わったあとに、fooが実行されています。
+		cout << "async deferred foo" << endl;
+		future<int> f1 = std::async(
+			std::launch::deferred, foo);
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		cout << "after sleep" << endl;
+		int r = f1.get();
+		cout << r << endl;
+	}
+	return 0;
+}*/
+
 #include <iostream>
 #include <functional>
 #include <list>
@@ -704,7 +735,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 */
 
 #pragma once
-
+//void(* m_Call)(); m_Call = []() ->void {};
 namespace rnfs
 {
 	///<summary>
@@ -1382,6 +1413,146 @@ namespace rnfs
 		return static_cast<PRIORITY>(m_Priority);
 	}
 }
+
+namespace dxrx {
+
+	interface IDisposable {
+		bool disable();
+	};
+	template <class Type>
+	interface IObserver {
+		void OnCompleted();
+		void OnError(std::exception& error);
+		void OnNext(Type value);
+	};
+	template <class Type>
+	interface IObservable {
+		IDisposable Subscribe(IObserver<Type>* observer);
+	};
+	template <class TSource, class TResult>
+	interface ISubject : IObserver<TSource>, IObservable<TResult>
+	{
+
+	};
+	template <class T>
+	interface ISubject2 : ISubject<T, T>, IObserver<T>, IObservable<T>
+	{
+
+	};
+	template <class TKey, class TElement>
+	interface IGroupedObservable : IObservable<TElement>
+	{
+		TKey Key() { return key; }
+	private:
+		TKey key;
+	};
+
+
+	template <class T>
+	class MyFilter :public IObservable<T>
+	{
+	public:
+		CRITICAL_SECTION    g_cs;
+		class Lock
+		{
+		public:
+#pragma prefast( suppress:26166, "g_bThreadSafe controls behavior" )
+			inline _Acquires_lock_(g_cs) Lock() { EnterCriticalSection(&g_cs); }
+#pragma prefast( suppress:26165, "g_bThreadSafe controls behavior" )
+			inline _Releases_lock_(g_cs) ~Lock() { LeaveCriticalSection(&g_cs); }
+		};
+		/// <summary>
+		/// 上流となるObservable
+		/// </summary>
+		IObservable<T> _source;
+
+		/// <summary>
+		/// 判定式
+		/// </summary>
+		std::function<bool(T)> _conditionalFunc;
+
+		MyFilter(IObservable<T> source, std::function<bool(T)> conditionalFunc)
+		{
+			_source = source;
+			_conditionalFunc = conditionalFunc;
+		}
+
+		IDisposable Subscribe(IObserver<T>*observer)
+		{
+			//Subscribeされたら、MyFilterOperator本体を作って返却
+			return MyFilterInternal(this, observer).Run();
+		}
+
+		// ObserverとしてMyFilterInternalが実際に機能する
+		class MyFilterInternal : IObserver<T>
+		{
+			MyFilter<T>* _parent;
+			IObserver<T>* _observer;
+
+			MyFilterInternal(MyFilter<T>* parent, IObserver<T>* observer)
+			{
+				_observer = observer;
+				_parent = parent;
+			}
+
+			IDisposable Run()
+			{
+				return _parent->_source.Subscribe(this);
+			}
+
+			void OnNext(T value)
+			{
+				Lock l;
+
+				if (_observer == nullptr) return;
+				try
+				{
+					//条件を満たす場合のみOnNextを通過
+					if (_parent->_conditionalFunc(value))
+					{
+						_observer->OnNext(value);
+					}
+				}
+				catch (std::exception& e)
+				{
+					//途中でエラーが発生したらエラーを送信
+					_observer->OnError(e);
+					_observer = nullptr;
+				}
+
+			}
+
+			void OnError(std::exception& error)
+			{
+				Lock l;
+
+				//エラーを伝播して停止
+				_observer->OnError(error);
+				_observer = nullptr;
+
+			}
+
+			void OnCompleted()
+			{
+				Lock l;
+
+				//停止
+				_observer->OnCompleted();
+				_observer = nullptr;
+
+			}
+		};
+	};
+	template <class T>
+	class ObservableOperators
+	{
+		IObservable<T> FilterOperator(IObservable<T>* source, std::function<bool(T)> conditionalFunc)
+		{
+			return MyFilter<T>(source, conditionalFunc);
+		}
+	};
+}
+
 #include <chrono>
 namespace s3d
 {	/// <summary>
